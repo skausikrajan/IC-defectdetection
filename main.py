@@ -1,60 +1,120 @@
 import cv2
 import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers, models
 from google.colab.patches import cv2_imshow  # For displaying images in Colab
 from google.colab import files  # For uploading files
+import os
 
-def detect_ic(input_image_path, good_ic_path, faulty_ic_path):
-    # Load the input, good IC, and faulty IC images
-    input_image = cv2.imread(input_image_path, cv2.IMREAD_GRAYSCALE)
-    good_ic_image = cv2.imread(good_ic_path, cv2.IMREAD_GRAYSCALE)
-    faulty_ic_image = cv2.imread(faulty_ic_path, cv2.IMREAD_GRAYSCALE)
+# Function to preprocess the images: resize, grayscale, and normalize
+def preprocess_image(image_path):
+    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise ValueError(f"Error loading image: {image_path}")
+    # Resize image to standard size
+    image = cv2.resize(image, (300, 300))
+    # Normalize image
+    image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX)
+    image = np.expand_dims(image, axis=-1)  # Add channel dimension (e.g., (300, 300, 1))
+    return image
 
-    if input_image is None or good_ic_image is None or faulty_ic_image is None:
-        print("Error: Could not load one or more images. Please check the file paths.")
-        return
+# Function to load and preprocess datasets (good and faulty IC images)
+def load_dataset(image_paths):
+    images = []
+    labels = []
+    for path in image_paths:
+        image = preprocess_image(path)
+        images.append(image)
+        labels.append(0 if "good" in path else 1)  # Label: 0 for Good, 1 for Faulty
+    return np.array(images), np.array(labels)
 
-    # Resize the images to the same size for comparison
-    input_image = cv2.resize(input_image, (300, 300))
-    good_ic_image = cv2.resize(good_ic_image, (300, 300))
-    faulty_ic_image = cv2.resize(faulty_ic_image, (300, 300))
+# Build CNN model for image classification
+def build_cnn_model():
+    model = models.Sequential([
+        layers.Conv2D(32, (3, 3), activation='relu', input_shape=(300, 300, 1)),
+        layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(64, (3, 3), activation='relu'),
+        layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(64, (3, 3), activation='relu'),
+        layers.Flatten(),
+        layers.Dense(64, activation='relu'),
+        layers.Dense(1, activation='sigmoid')  # Binary classification (Good or Faulty)
+    ])
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
 
-    # Compute the absolute differences
-    diff_with_good = cv2.absdiff(input_image, good_ic_image)
-    diff_with_faulty = cv2.absdiff(input_image, faulty_ic_image)
+# Function to upload and train the model
+def upload_and_train():
+    # Upload Good IC images (n images)
+    print("Please upload the Good IC images (you can upload multiple images):")
+    uploaded_good_ic = files.upload()
+    good_ic_paths = list(uploaded_good_ic.keys())
 
-    # Threshold the differences to highlight significant changes
-    _, thresh_good = cv2.threshold(diff_with_good, 50, 255, cv2.THRESH_BINARY)
-    _, thresh_faulty = cv2.threshold(diff_with_faulty, 50, 255, cv2.THRESH_BINARY)
+    # Upload Faulty IC images (n images)
+    print("Please upload the Faulty IC images (you can upload multiple images):")
+    uploaded_faulty_ic = files.upload()
+    faulty_ic_paths = list(uploaded_faulty_ic.keys())
 
-    # Count the non-zero pixels in the thresholded differences
-    non_zero_good = cv2.countNonZero(thresh_good)
-    non_zero_faulty = cv2.countNonZero(thresh_faulty)
+    # Combine all image paths
+    all_image_paths = good_ic_paths + faulty_ic_paths
 
-    # Determine whether the input image matches the Good IC or Faulty IC more closely
-    if non_zero_good < non_zero_faulty:
-        print("The input image is a Good IC - No faults detected!")
-    else:
+    # Load dataset and preprocess
+    images, labels = load_dataset(all_image_paths)
+    images = images / 255.0  # Normalize images to [0, 1]
+
+    # Split the dataset into train and test sets
+    train_images = images[:int(0.8 * len(images))]
+    train_labels = labels[:int(0.8 * len(labels))]
+    test_images = images[int(0.8 * len(images)):]
+    test_labels = labels[int(0.8 * len(labels)):]
+
+    # Build and train the CNN model
+    model = build_cnn_model()
+    model.fit(train_images, train_labels, epochs=30, validation_data=(test_images, test_labels))  # Increased epochs
+
+    # Save the trained model
+    model.save('ic_detection_model.h5')
+
+    print("Model training completed!")
+
+# Function to predict if the input IC image is good or faulty
+def predict(input_image_path):
+    # Load and preprocess the input image
+    input_image = preprocess_image(input_image_path)
+    input_image = input_image / 255.0  # Normalize image to [0, 1]
+
+    # Load the trained model
+    model = tf.keras.models.load_model('ic_detection_model.h5')
+
+    # Predict the input image
+    prediction = model.predict(np.expand_dims(input_image, axis=0))
+    print("Prediction score:", prediction[0])
+
+    if prediction[0] > 0.5:
         print("The input image is a Faulty IC - Fault detected!")
+    else:
+        print("The input image is a Good IC - No faults detected!")
 
-    # Display images for debugging (optional)
+    # Display the input image
     print("Input Image:")
-    cv2_imshow(input_image)
-    print("Difference with Good IC:")
-    cv2_imshow(diff_with_good)
-    print("Difference with Faulty IC:")
-    cv2_imshow(diff_with_faulty)
+    cv2_imshow(input_image[0])
 
-# Step 1: Upload the reference images (Good IC and Faulty IC)
-print("Please upload the Good IC and Faulty IC reference images:")
-uploaded = files.upload()
-if len(uploaded) != 3:
-    print("Error: Please upload exactly three images (Good IC, Faulty IC, and Input IC).")
-else:
-    # Get the file paths for Good IC, Faulty IC, and Input IC images
-    file_paths = list(uploaded.keys())
-    good_ic_path = file_paths[0]  # First uploaded image is Good IC
-    faulty_ic_path = file_paths[1]  # Second uploaded image is Faulty IC
-    input_ic_path = file_paths[2]  # Third uploaded image is Input IC
+# Function to upload input image and detect
+def upload_and_detect():
+    # Upload the input IC image to be tested
+    print("Please upload the Input IC image:")
+    uploaded_input_ic = files.upload()
+    if len(uploaded_input_ic) != 1:
+        print("Error: Please upload exactly one Input IC image.")
+        return
+    input_ic_path = list(uploaded_input_ic.keys())[0]
 
-    # Step 2: Perform IC detection
-    detect_ic(input_ic_path, good_ic_path, faulty_ic_path)
+    # Perform IC detection
+    predict(input_ic_path)
+
+# Run the upload, train, and detect process
+# First, train the model
+upload_and_train()
+
+# After training, test the model
+upload_and_detect()
