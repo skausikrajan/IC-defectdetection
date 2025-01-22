@@ -1,11 +1,11 @@
 import cv2
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
 from tensorflow.keras import layers, models
 from sklearn.model_selection import train_test_split
 from google.colab.patches import cv2_imshow  # For displaying images in Colab
 from google.colab import files  # For uploading files
+import matplotlib.pyplot as plt  # For accuracy and loss visualization
 
 # Function to preprocess the images: resize, grayscale, and normalize
 def preprocess_image(image_path):
@@ -52,6 +52,29 @@ def build_cnn_model():
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return model
 
+# Function to plot training accuracy and loss
+def plot_training_history(history):
+    # Plot accuracy
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['accuracy'], label='Training Accuracy', marker='o')
+    plt.plot(history.history['val_accuracy'], label='Validation Accuracy', marker='o')
+    plt.title('Accuracy Over Epochs')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy')
+    plt.legend()
+
+    # Plot loss
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['loss'], label='Training Loss', marker='o')
+    plt.plot(history.history['val_loss'], label='Validation Loss', marker='o')
+    plt.title('Loss Over Epochs')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+
+    plt.show()
+
 # Function to upload and train the model
 def upload_and_train():
     print("Please upload the Good IC images:")
@@ -87,33 +110,8 @@ def upload_and_train():
     model.save('ic_fault_detector_model.keras')
     print("Model training complete. Saved as 'ic_fault_detector_model.keras'.")
 
-    # Plot training accuracy and loss
+    # Plot training history
     plot_training_history(history)
-
-    return model
-
-# Function to plot training accuracy and loss
-def plot_training_history(history):
-    # Plot accuracy
-    plt.figure(figsize=(12, 6))
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['accuracy'], label='Train Accuracy')
-    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-    plt.title('Training and Validation Accuracy')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
-    plt.legend()
-
-    # Plot loss
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['loss'], label='Train Loss')
-    plt.plot(history.history['val_loss'], label='Validation Loss')
-    plt.title('Training and Validation Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.legend()
-
-    plt.show()
 
 # Function to predict faults in new images
 def predict_fault():
@@ -142,21 +140,15 @@ def predict_fault():
         predicted_class = np.argmax(prediction, axis=1)[0]
         fault_type = fault_types[predicted_class]
 
-        # Display the result
+        # Display the result with confidence percentages
         print(f"Fault Detected: {fault_type}")
-        plot_prediction_probabilities(prediction)
-
-# Function to plot prediction probabilities
-def plot_prediction_probabilities(prediction):
-    plt.bar([0, 1, 2], prediction[0], color=['blue', 'orange', 'green'])
-    plt.xticks([0, 1, 2], ['Good', 'Scratch', 'Broken Legs'])
-    plt.title('Prediction Probabilities')
-    plt.ylabel('Probability')
-    plt.show()
+        print("Confidence Scores:")
+        for i, fault in enumerate(fault_types):
+            print(f"{fault}: {prediction[0][i] * 100:.2f}%")
 
 # Main Workflow
 # 1. Train the model
-model = upload_and_train()
+upload_and_train()
 
 # 2. Predict faults in new images
 predict_fault()
