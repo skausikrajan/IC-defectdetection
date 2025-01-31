@@ -145,7 +145,7 @@ def upload_and_train():
     model.save('ic_fault_detector_model.keras')
     print("Model training complete. Saved as 'ic_fault_detector_model.keras'.")
 
-# Function to predict faults in new images with bounding box
+# Function to predict faults and display bounding boxes
 def predict_fault():
     print("Please upload the images for fault detection:")
     uploaded_files = files.upload()
@@ -156,27 +156,28 @@ def predict_fault():
     
     for image_path in image_paths:
         original_image = cv2.imread(image_path)
+        cv2_imshow(original_image)
         image = preprocess_image(image_path)
-        image = np.expand_dims(image, axis=0)  # Add batch dimension
-        prediction = model.predict(image)
+        image_expanded = np.expand_dims(image, axis=0)  # Add batch dimension
+        prediction = model.predict(image_expanded)
         predicted_class = np.argmax(prediction, axis=1)[0]
         fault_type = fault_types[predicted_class]
-        
-        # Draw bounding box around the entire image
-        height, width, _ = original_image.shape
-        cv2.rectangle(original_image, (0, 0), (width, height), (0, 255, 0), 2)  # Green bounding box
-        
-        # Add text label
-        label = f"Fault: {fault_type}"
-        cv2.putText(original_image, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        
-        # Display the image with bounding box and label
-        cv2_imshow(original_image)
-        
         print(f"Fault Detected: {fault_type}")
         print("Confidence Scores:")
         for i, fault in enumerate(fault_types):
             print(f"{fault}: {prediction[0][i] * 100:.2f}%")
+        
+        # Visualizing bounding boxes
+        if fault_type != "Good":  # If defect is detected, draw bounding box
+            # Simulating bounding box around the detected defect area (using random values here for demonstration)
+            height, width, _ = original_image.shape
+            x1, y1 = int(width * 0.1), int(height * 0.1)  # Top left corner
+            x2, y2 = int(width * 0.5), int(height * 0.5)  # Bottom right corner
+            cv2.rectangle(original_image, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green box for defect
+            cv2.putText(original_image, f"Defect: {fault_type}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        # Show the result with bounding box
+        cv2_imshow(original_image)
 
 # Main Workflow
 upload_and_train()
