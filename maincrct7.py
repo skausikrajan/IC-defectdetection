@@ -5,90 +5,64 @@ from tensorflow.keras import layers, models
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from sklearn.model_selection import train_test_split
-from google.colab.patches import cv2_imshow  # For displaying images in Colab
-from google.colab import files  # For uploading files
-import matplotlib.pyplot as plt  # For accuracy and loss visualization
+from sklearn.utils.class_weight import compute_class_weight
+import os
+from google.colab.patches import cv2_imshow  # Display images in Colab
+from google.colab import files  # Upload files
+import matplotlib.pyplot as plt  # Visualization
 
-# Function to preprocess the images: resize, grayscale, and normalize
+# 🔹 Preprocess Images: Resize, Grayscale → RGB, Normalize
 def preprocess_image(image_path):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if image is None:
         raise ValueError(f"Error loading image: {image_path}")
-    image = cv2.resize(image, (224, 224))  # Resize to 224x224 for MobileNetV2
-    image = np.expand_dims(image, axis=-1)  # Add channel dimension for grayscale (1 channel)
-    image = np.repeat(image, 3, axis=-1)  # Convert grayscale (1 channel) to RGB (3 channels)
-    return image / 255.0  # Normalize to [0, 1]
+    image = cv2.resize(image, (224, 224))  # Resize for MobileNetV2
+    image = np.expand_dims(image, axis=-1)  # Add channel dimension
+    image = np.repeat(image, 3, axis=-1)  # Convert grayscale → RGB
+    return image / 255.0  # Normalize
 
-# Function to load and preprocess datasets
+# 🔹 Load & Preprocess Dataset
 def load_dataset(image_paths):
-    images = []
-    labels = []  # 0: Good, 1: Scratch, 2: Broken Legs
+    images, labels = [], []
     for path in image_paths:
-        image = preprocess_image(path)
+        full_path = os.path.join("/content", path)  # Ensure full path
+        image = preprocess_image(full_path)
         images.append(image)
+
         if "good" in path.lower():
             labels.append(0)  # Good
         elif "scratch" in path.lower():
             labels.append(1)  # Scratch
         elif "broken" in path.lower():
             labels.append(2)  # Broken Legs
+
     return np.array(images), np.array(labels)
 
-# Data augmentation generator with diagonal flip
+# 🔹 Data Augmentation for Training
 def augment_data(train_images, train_labels):
     datagen = ImageDataGenerator(
-        rotation_range=15,
-        width_shift_range=0.1,
-        height_shift_range=0.1,
-        zoom_range=0.1,
-        horizontal_flip=True,
-        vertical_flip=True  # Horizontal and vertical flips
+        rotation_range=10, width_shift_range=0.05, height_shift_range=0.05,
+        zoom_range=0.05, horizontal_flip=False, vertical_flip=False
     )
+    return datagen.flow(train_images, train_labels, batch_size=8)
 
-    augmented_images = []
-    augmented_labels = []
-
-    # Apply additional diagonal flips manually
-    for image, label in zip(train_images, train_labels):
-        augmented_images.append(image)
-        augmented_labels.append(label)
-
-        # Horizontal flip
-        horizontal_flip = cv2.flip(image, 1)
-        augmented_images.append(horizontal_flip)
-        augmented_labels.append(label)
-
-        # Vertical flip
-        vertical_flip = cv2.flip(image, 0)
-        augmented_images.append(vertical_flip)
-        augmented_labels.append(label)
-
-        # Diagonal flip (horizontal + vertical)
-        diagonal_flip = cv2.flip(image, -1)
-        augmented_images.append(diagonal_flip)
-        augmented_labels.append(label)
-
-    augmented_images = np.array(augmented_images)
-    augmented_labels = np.array(augmented_labels)
-    return datagen.flow(augmented_images, augmented_labels, batch_size=8)
-
-# Build and compile the model
+# 🔹 Build MobileNetV2 Model
 def build_cnn_model():
     base_model = tf.keras.applications.MobileNetV2(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
-    base_model.trainable = False  # Freeze the base model layers
+    base_model.trainable = False  
 
     model = models.Sequential([
         base_model,
         layers.GlobalAveragePooling2D(),
-        layers.Dense(128, activation='relu'),
-        layers.Dropout(0.5),
-        layers.Dense(3, activation='softmax')  # 3 classes: Good, Scratch, Broken
+        layers.Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.01)),
+        layers.Dropout(0.3),
+        layers.Dense(3, activation='softmax')  
     ])
     
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return model
 
-# Function to plot training accuracy and loss
+# 🔹 Plot Training History
 def plot_training_history(history):
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
@@ -107,32 +81,33 @@ def plot_training_history(history):
     plt.legend()
     plt.show()
 
-# Function to upload dataset and train the model
+# 🔹 Upload Dataset & Train Model
 def upload_and_train():
-    print("Please upload the Good IC images:")
+    print("Please upload Good IC images:")
     uploaded_good_ic = files.upload()
     good_ic_paths = list(uploaded_good_ic.keys())
-    
-    print("Please upload the Scratch Fault IC images:")
+
+    print("Please upload Scratch Fault IC images:")
     uploaded_scratch_ic = files.upload()
     scratch_ic_paths = list(uploaded_scratch_ic.keys())
-    
-    print("Please upload the Broken Legs IC images:")
+
+    print("Please upload Broken Legs IC images:")
     uploaded_broken_ic = files.upload()
     broken_ic_paths = list(uploaded_broken_ic.keys())
-    
+
     all_image_paths = good_ic_paths + scratch_ic_paths + broken_ic_paths
     images, labels = load_dataset(all_image_paths)
-    
-    train_images, val_images, train_labels, val_labels = train_test_split(
-        images, labels, test_size=0.2, random_state=42
-    )
-    
+
+    train_images, val_images, train_labels, val_labels = train_test_split(images, labels, test_size=0.2, random_state=42)
+
     model = build_cnn_model()
-    
     augmented_data = augment_data(train_images, train_labels)
 
-    # Callbacks for early stopping and saving the best model
+    # Compute Class Weights
+    class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(train_labels), y=train_labels)
+    class_weight_dict = {i: class_weights[i] for i in range(len(class_weights))}
+
+    # Callbacks for Model Checkpoint & Early Stopping
     checkpoint = ModelCheckpoint('best_model.keras', monitor='val_loss', save_best_only=True)
     early_stopping = EarlyStopping(monitor='val_loss', patience=5)
 
@@ -140,47 +115,51 @@ def upload_and_train():
         augmented_data,
         validation_data=(val_images, val_labels),
         epochs=50,
-        callbacks=[checkpoint, early_stopping]
+        callbacks=[checkpoint, early_stopping],
+        class_weight=class_weight_dict
     )
-    
+
     plot_training_history(history)
     model.save('ic_fault_detector_model.keras')
     print("Model training complete. Saved as 'ic_fault_detector_model.keras'.")
 
-# Function to predict faults and display bounding boxes with better UI/UX
+# 🔹 Predict Faults & Draw Bounding Boxes
 def predict_fault():
-    print("Please upload the images for fault detection:")
+    print("Please upload images for fault detection:")
     uploaded_files = files.upload()
     image_paths = list(uploaded_files.keys())
-    
+
     model = tf.keras.models.load_model('ic_fault_detector_model.keras')
+
+    # Make a dummy call to model to ensure it's initialized
+    dummy_input = np.zeros((1, 224, 224, 3))
+    _ = model.predict(dummy_input)
+
     fault_types = ['Good', 'Scratch', 'Broken Legs']
-    colors = [(0, 255, 0), (0, 255, 255), (0, 0, 255)]  # Green, Yellow, Red
-    
+    colors = [(0, 255, 0), (0, 255, 255), (0, 0, 255)]
+
     for image_path in image_paths:
         original_image = cv2.imread(image_path)
         image = preprocess_image(image_path)
-        image_expanded = np.expand_dims(image, axis=0)  # Add batch dimension
+        image_expanded = np.expand_dims(image, axis=0)
         prediction = model.predict(image_expanded)
         predicted_class = np.argmax(prediction, axis=1)[0]
         fault_type = fault_types[predicted_class]
         confidence = prediction[0][predicted_class] * 100
-        
-        # Draw bounding box only for defective ICs
+
         if fault_type != "Good":
             height, width, _ = original_image.shape
-            x1, y1 = int(width * 0.2), int(height * 0.2)  # Dynamic bounding box
-            x2, y2 = int(width * 0.8), int(height * 0.8)
+            x1, y1 = int(width * 0.3), int(height * 0.3)
+            x2, y2 = int(width * 0.7), int(height * 0.7)
             color = colors[predicted_class]
-            
+
             cv2.rectangle(original_image, (x1, y1), (x2, y2), color, 3)
             cv2.putText(original_image, f"{fault_type} ({confidence:.2f}%)", (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-        
-        # Display the result
+
         cv2_imshow(original_image)
         print(f"Fault Detected: {fault_type} with {confidence:.2f}% confidence")
 
-# Main workflow
-upload_and_train()  # First, upload dataset and train the model
-predict_fault()  # Then, upload images for testing
+# 🔹 Main Execution
+upload_and_train()
+predict_fault()
