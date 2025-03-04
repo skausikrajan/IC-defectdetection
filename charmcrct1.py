@@ -7,12 +7,17 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLRO
 from sklearn.utils.class_weight import compute_class_weight
 import os
 import matplotlib.pyplot as plt
+
 # 🔹 Define dataset paths explicitly
 TRAIN_GOOD_IC_PATH = "C:\\Upd Dataset\\Good ic 2"
 TRAIN_SCRATCH_IC_PATH = "C:\\Upd Dataset\\Scratch 2"
 TRAIN_BROKEN_IC_PATH = "C:\\Upd Dataset\\Broken 2"
 
-CLASS_LABELS = {0: "Good IC", 1: "Scratched IC", 2: "Broken Legs"}
+VAL_GOOD_IC_PATH = "C:\\Upd Dataset\\good ic 3"
+VAL_SCRATCH_IC_PATH = "C:\\Upd Dataset\\scratch 3"
+VAL_BROKEN_IC_PATH = "C:\\Upd Dataset\\broken 3"
+
+CLASS_LABELS = {"good": 0, "scratch": 1, "broken": 2}
 
 # 🔹 Preprocess Images: Resize, Normalize, Convert to RGB
 def preprocess_image(image):
@@ -26,6 +31,7 @@ def preprocess_image(image):
 def load_dataset(good_ic_path, scratch_ic_path, broken_ic_path):
     images, labels = [], []
 
+    # Load Good IC Images
     for file in os.listdir(good_ic_path):
         image_path = os.path.join(good_ic_path, file)
         image = cv2.imread(image_path)
@@ -34,6 +40,7 @@ def load_dataset(good_ic_path, scratch_ic_path, broken_ic_path):
         images.append(preprocess_image(image))
         labels.append(0)  # Label for Good IC
 
+    # Load Scratched IC Images
     for file in os.listdir(scratch_ic_path):
         image_path = os.path.join(scratch_ic_path, file)
         image = cv2.imread(image_path)
@@ -42,6 +49,7 @@ def load_dataset(good_ic_path, scratch_ic_path, broken_ic_path):
         images.append(preprocess_image(image))
         labels.append(1)  # Label for Scratched IC
 
+    # Load Broken Legs IC Images
     for file in os.listdir(broken_ic_path):
         image_path = os.path.join(broken_ic_path, file)
         image = cv2.imread(image_path)
@@ -83,6 +91,7 @@ def plot_training_history(history):
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
     plt.plot(history.history['accuracy'], label='Training Accuracy', marker='o')
+    plt.plot(history.history['val_accuracy'], label='Validation Accuracy', marker='o')
     plt.title('Accuracy Over Epochs')
     plt.xlabel('Epochs')
     plt.ylabel('Accuracy')
@@ -90,6 +99,7 @@ def plot_training_history(history):
 
     plt.subplot(1, 2, 2)
     plt.plot(history.history['loss'], label='Training Loss', marker='o')
+    plt.plot(history.history['val_loss'], label='Validation Loss', marker='o')
     plt.title('Loss Over Epochs')
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
@@ -102,12 +112,13 @@ def train_model():
     print("📂 Loading dataset...")
 
     train_images, train_labels = load_dataset(TRAIN_GOOD_IC_PATH, TRAIN_SCRATCH_IC_PATH, TRAIN_BROKEN_IC_PATH)
+    val_images, val_labels = load_dataset(VAL_GOOD_IC_PATH, VAL_SCRATCH_IC_PATH, VAL_BROKEN_IC_PATH)
 
-    if len(train_images) == 0:
-        print("❌ Error: Training dataset is empty. Check your dataset paths.")
+    if len(train_images) == 0 or len(val_images) == 0:
+        print("❌ Error: Training or validation dataset is empty. Check your dataset paths.")
         return
 
-    print(f"✅ Loaded {len(train_images)} training images.")
+    print(f"✅ Loaded {len(train_images)} training images and {len(val_images)} validation images.")
 
     # Compute Class Weights for Handling Imbalance
     class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(train_labels), y=train_labels)
@@ -117,12 +128,13 @@ def train_model():
     augmented_data = augment_data(train_images, train_labels)
 
     # Callbacks for Overfitting Prevention
-    checkpoint = ModelCheckpoint('ic_fault_detector_model.keras', monitor='loss', save_best_only=True)
-    early_stopping = EarlyStopping(monitor='loss', patience=7)
-    reduce_lr = ReduceLROnPlateau(monitor='loss', factor=0.5, patience=3, min_lr=1e-6)
+    checkpoint = ModelCheckpoint('ic_fault_detector_model.keras', monitor='val_loss', save_best_only=True)
+    early_stopping = EarlyStopping(monitor='val_loss', patience=7)
+    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6)
 
     history = model.fit(
         augmented_data,
+        validation_data=(val_images, val_labels),
         epochs=50,
         callbacks=[checkpoint, early_stopping, reduce_lr],
         class_weight=class_weight_dict
@@ -132,7 +144,7 @@ def train_model():
     model.save('ic_fault_detector_model.keras')
     print("✅ Model training complete. Saved as 'ic_fault_detector_model.keras'.")
 
-# 🔹 Real-time IC Defect Detection using Webcam with Bounding Box
+# 🔹 Real-time IC Defect Detection using Webcam
 def real_time_detection():
     print("\n🎥 Initializing Webcam for Real-Time Detection...")
     model = tf.keras.models.load_model('ic_fault_detector_model.keras')
@@ -150,27 +162,16 @@ def real_time_detection():
             print("❌ Error: Unable to read frame.")
             break
 
-        # Convert to grayscale and apply thresholding to detect IC
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 80, 255, cv2.THRESH_BINARY_INV)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Process frame
+        processed_frame = preprocess_image(frame)
+        prediction = model.predict(np.expand_dims(processed_frame, axis=0))
+        predicted_class = np.argmax(prediction, axis=1)[0]
+        fault_type = fault_types[predicted_class]
+        confidence = prediction[0][predicted_class] * 100
 
-        for cnt in contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-            if w * h > 1000:  # Minimum area to avoid noise
-                roi = frame[y:y+h, x:x+w]
-                processed_roi = preprocess_image(roi)
-
-                prediction = model.predict(np.expand_dims(processed_roi, axis=0))
-                predicted_class = np.argmax(prediction, axis=1)[0]
-                fault_type = fault_types[predicted_class]
-                confidence = prediction[0][predicted_class] * 100
-
-                # Draw bounding box with label
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                cv2.putText(frame, f"{fault_type} ({confidence:.2f}%)", (x, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
+        # Display result on frame
+        label = f"IC Status: {fault_type} ({confidence:.2f}%)"
+        cv2.putText(frame, label, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         cv2.imshow("IC Defect Detection", frame)
 
         # Press 'q' to quit
